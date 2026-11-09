@@ -264,7 +264,21 @@ class EnvironmentStdioTransport implements Transport {
     const process = this.process;
     this.process = undefined;
     if (process !== undefined) {
-      try {
+      await this.terminate(process);
+    }
+    this.readBuffer.clear();
+    const tracked = this.tracked;
+    this.tracked = undefined;
+    void tracked?.dispose();
+    const lease = this.lease;
+    this.lease = undefined;
+    lease?.dispose();
+    this.onclose?.();
+  }
+
+  private async terminate(process: IHostProcess): Promise<void> {
+    try {
+      if (process.exitCode === null) {
         await process.kill();
         let graceTimer: ReturnType<typeof setTimeout> | undefined;
         const exited = await Promise.race([
@@ -284,17 +298,9 @@ class EnvironmentStdioTransport implements Transport {
           await process.kill('SIGKILL');
           await process.wait();
         }
-      } catch {}
-      void process.dispose();
-    }
-    this.readBuffer.clear();
-    const tracked = this.tracked;
-    this.tracked = undefined;
-    void tracked?.dispose();
-    const lease = this.lease;
-    this.lease = undefined;
-    lease?.dispose();
-    this.onclose?.();
+      }
+    } catch {}
+    void process.dispose();
   }
 
   private onData(chunk: Buffer | string): void {
@@ -315,7 +321,9 @@ class EnvironmentStdioTransport implements Transport {
     this.closed = true;
     const process = this.process;
     this.process = undefined;
-    void process?.dispose();
+    if (process !== undefined) {
+      void this.terminate(process);
+    }
     this.readBuffer.clear();
     const tracked = this.tracked;
     this.tracked = undefined;

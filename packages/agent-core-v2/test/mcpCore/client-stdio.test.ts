@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -21,6 +21,7 @@ import { IEnvironmentService, type EnvironmentResolver } from '#/app/environment
 import {
   crashAfterConnectFixture,
   cwdStdioFixture,
+  orphanStdoutFixture,
   stderrThenExitFixture,
   stdioFixture,
 } from './stubs';
@@ -143,6 +144,15 @@ function isPostCloseTransportError(error: unknown): boolean {
     message.includes('Connection closed') ||
     message.includes('transport is not running')
   );
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 describe('StdioMcpClient', () => {
@@ -512,6 +522,48 @@ describe('StdioMcpClient', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(closes).toEqual([]);
   }, 15000);
+
+  it('terminates the child when it stays alive after its stdout closes', async () => {
+    const pidFile = join(
+      tmpdir(),
+      `kimi-mcp-orphan-${Date.now()}-${Math.random().toString(36).slice(2)}.pid`,
+    );
+    const client = createClient({
+      transport: 'stdio',
+      command: process.execPath,
+      args: [orphanStdoutFixture],
+      env: { KIMI_TEST_ORPHAN_PID_FILE: pidFile },
+    });
+    let pid = -1;
+    try {
+      await client.connect();
+      const reply = await client.callTool('sever_stdout', {});
+      expect(reply.isError).toBe(false);
+
+      const pidDeadline = Date.now() + 5000;
+      while (Date.now() < pidDeadline && !existsSync(pidFile)) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      pid = Number.parseInt(readFileSync(pidFile, 'utf8'), 10);
+      expect(Number.isInteger(pid)).toBe(true);
+
+      const spawnDeadline = Date.now() + 5000;
+      while (Date.now() < spawnDeadline && !isProcessAlive(pid)) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(isProcessAlive(pid)).toBe(true);
+
+      const terminateDeadline = Date.now() + 15000;
+      while (Date.now() < terminateDeadline && isProcessAlive(pid)) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(isProcessAlive(pid)).toBe(false);
+    } finally {
+      if (pid > 0 && isProcessAlive(pid)) process.kill(pid, 'SIGKILL');
+      await client.close();
+      rmSync(pidFile, { force: true });
+    }
+  }, 25000);
 
   function createTrackingClient(
     config: McpServerStdioConfig,
