@@ -1,58 +1,88 @@
 import type { ContextMessage } from '#/agent/contextMemory/types';
 import type { ToolInputDisplay } from '#/tool/toolInputDisplay';
-import type { HistoryMessage } from '@moonshot-ai/core/llm/history';
-import type { UserMessage } from '@moonshot-ai/core/llm/message';
+import type {
+  AssistantMessageAttributes,
+  Message,
+  MessageAttributes,
+  ToolMessageAttributes,
+  UserMessage,
+  UserMessageAttributes,
+} from '@moonshot-ai/core/llm/message';
 import { emptyUsage } from '@moonshot-ai/core/llm/usage';
 
 export const EMPTY_LOOP_PROMPT: UserMessage = { role: 'user', content: [] };
 
-export function historyEntryFromContext(entry: ContextMessage): HistoryMessage {
-  const meta = {
-    promptId: entry.id,
+function compactAttributes<T extends object>(attributes: T): T | undefined {
+  const entries = Object.entries(attributes).filter(([, value]) => value !== undefined);
+  return entries.length === 0 ? undefined : (Object.fromEntries(entries) as T);
+}
+
+export function historyEntryFromContext(entry: ContextMessage): Message {
+  const base: MessageAttributes = {
     origin: entry.origin,
-    messageId: entry.providerMessageId,
-    usage: entry.usage,
-    isError: entry.isError === true ? true as const : undefined,
-    partial: entry.partial === true ? true as const : undefined,
+    partial: entry.partial === true ? true : undefined,
     llmTiming: entry.llmTiming,
     note: entry.note,
     durationMs: entry.durationMs,
   };
-  const message = { ...entry };
-  delete message.id;
-  delete message.origin;
-  delete message.providerMessageId;
-  delete message.usage;
-  delete message.isError;
-  delete message.partial;
-  delete message.llmTiming;
-  delete message.note;
-  delete message.durationMs;
-  delete message.toolCallDisplays;
   switch (entry.role) {
-    case 'system':
-      return { message: { ...message, role: 'system' }, meta };
-    case 'user':
-      return { message: { ...message, role: 'user' }, meta };
-    case 'assistant':
+    case 'system': {
+      const attributes = compactAttributes(base);
       return {
-        message: { ...message, role: 'assistant', toolCalls: entry.toolCalls },
-        meta: { ...meta, usage: entry.usage ?? (entry.partial === true ? undefined : emptyUsage()) },
+        role: 'system',
+        content: entry.content,
+        ...(entry.tools === undefined ? {} : { tools: entry.tools }),
+        ...(attributes === undefined ? {} : { attributes }),
       };
-    case 'tool':
-      return { message: { ...message, role: 'tool', toolCallId: entry.toolCallId }, meta };
+    }
+    case 'user': {
+      const attributes = compactAttributes<UserMessageAttributes>({
+        ...base,
+        promptId: entry.id,
+      });
+      return {
+        role: 'user',
+        content: entry.content,
+        ...(attributes === undefined ? {} : { attributes }),
+      };
+    }
+    case 'assistant': {
+      const attributes = compactAttributes<AssistantMessageAttributes>({
+        ...base,
+        messageId: entry.providerMessageId,
+        usage: entry.usage ?? (entry.partial === true ? undefined : emptyUsage()),
+      });
+      return {
+        role: 'assistant',
+        content: entry.content,
+        toolCalls: entry.toolCalls,
+        ...(attributes === undefined ? {} : { attributes }),
+      };
+    }
+    case 'tool': {
+      const attributes = compactAttributes<ToolMessageAttributes>({
+        ...base,
+        isError: entry.isError === true ? true : undefined,
+      });
+      return {
+        role: 'tool',
+        content: entry.content,
+        toolCallId: entry.toolCallId,
+        ...(attributes === undefined ? {} : { attributes }),
+      };
+    }
   }
 }
 
-export function historyFromContext(messages: readonly ContextMessage[]): HistoryMessage[] {
+export function historyFromContext(messages: readonly ContextMessage[]): Message[] {
   return messages.map(historyEntryFromContext);
 }
 
 export function contextFromHistoryEntry(
-  entry: HistoryMessage,
+  entry: Message,
   toolCallDisplays?: Record<string, ToolInputDisplay>,
 ): ContextMessage {
-  const meta = entry.meta as {
+  const attributes = entry.attributes as {
     readonly promptId?: string;
     readonly origin?: ContextMessage['origin'];
     readonly messageId?: string;
@@ -63,22 +93,23 @@ export function contextFromHistoryEntry(
     readonly note?: string;
     readonly durationMs?: number;
   } | undefined;
-  const message = entry.message as ContextMessage;
+  const legacy = entry as ContextMessage;
   const displays = toolCallDisplays !== undefined && Object.keys(toolCallDisplays).length > 0
     ? toolCallDisplays
     : undefined;
+  const { attributes: _attributes, ...coreMessage } = entry;
   return Object.fromEntries(
     Object.entries({
-      ...message,
-      id: meta?.promptId ?? message.id,
-      origin: meta?.origin ?? message.origin,
-      providerMessageId: meta?.messageId ?? message.providerMessageId,
-      usage: meta?.usage,
-      isError: meta?.isError ?? message.isError,
-      partial: meta?.partial ?? message.partial,
-      llmTiming: meta?.llmTiming ?? message.llmTiming,
-      note: meta?.note ?? message.note,
-      durationMs: meta?.durationMs ?? message.durationMs,
+      ...coreMessage,
+      id: attributes?.promptId ?? legacy.id,
+      origin: attributes?.origin ?? legacy.origin,
+      providerMessageId: attributes?.messageId ?? legacy.providerMessageId,
+      usage: attributes?.usage,
+      isError: attributes?.isError ?? legacy.isError,
+      partial: attributes?.partial ?? legacy.partial,
+      llmTiming: attributes?.llmTiming ?? legacy.llmTiming,
+      note: attributes?.note ?? legacy.note,
+      durationMs: attributes?.durationMs ?? legacy.durationMs,
       toolCallDisplays: displays,
     }).filter(([, value]) => value !== undefined),
   ) as ContextMessage;

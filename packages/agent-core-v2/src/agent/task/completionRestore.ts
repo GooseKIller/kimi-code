@@ -1,4 +1,4 @@
-import type { HistoryMessage, UserEntry } from '@moonshot-ai/core/llm/history';
+import type { Message, UserMessage } from '@moonshot-ai/core/llm/message';
 import type { IWireService } from '#/wire/wire';
 import { contextFromHistoryEntry } from '#/agent/loop/history';
 import { AgentTaskService } from './taskService';
@@ -9,10 +9,10 @@ export async function restoreTaskCompletions(options: {
   readonly wire: IWireService;
   readonly agentId: string;
   readonly taskOutputs: IAgentTaskOutputService;
-  readonly messages: readonly HistoryMessage[];
-  readonly pending?: readonly HistoryMessage[];
+  readonly messages: readonly Message[];
+  readonly pending?: readonly Message[];
   readonly isLive?: (taskId: string) => boolean;
-}): Promise<readonly UserEntry[]> {
+}): Promise<readonly UserMessage[]> {
   const { journal, restorable } = await options.wire.readRestoreChains();
   const history = new AgentTaskService(options.agentId);
   history.restore(journal);
@@ -29,7 +29,7 @@ export async function restoreTaskCompletions(options: {
       if (typeof key === 'string') delivered.add(key);
     }
   }
-  const completions: UserEntry[] = [];
+  const completions: UserMessage[] = [];
   for (const info of history.list(false)) {
     if (!TERMINAL_STATUSES.has(info.status)) continue;
     if (info.status === 'lost' && options.isLive?.(info.taskId) === true) continue;
